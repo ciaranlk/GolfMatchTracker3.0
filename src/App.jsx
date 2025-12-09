@@ -1,8 +1,3 @@
-// PATCHED VERSION WITH:
-// - Name editing per game
-// - Reset scores per game
-// - Export all games as JSON (can be converted to CSV externally)
-
 import React, { useState, useEffect } from 'react';
 import './App.css';
 
@@ -11,9 +6,10 @@ function calculateCourseHandicap(index, slope, rating) {
 }
 
 function App() {
+  const emptyGames = Array.from({ length: 8 }, () => null);
   const [games, setGames] = useState(() => {
     const saved = localStorage.getItem('games');
-    return saved ? JSON.parse(saved) : Array(8).fill(null);
+    return saved ? JSON.parse(saved) : emptyGames;
   });
   const [activeGameIndex, setActiveGameIndex] = useState(0);
 
@@ -21,25 +17,35 @@ function App() {
     localStorage.setItem('games', JSON.stringify(games));
   }, [games]);
 
-  const startGame = (index) => {
-    const redIndex = +document.getElementById(`redIndex${index}`).value;
-    const blueIndex = +document.getElementById(`blueIndex${index}`).value;
-    const rating = +document.getElementById(`rating${index}`).value;
-    const slope = +document.getElementById(`slope${index}`).value;
-    const redName = document.getElementById(`redName${index}`).value || 'Red';
-    const blueName = document.getElementById(`blueName${index}`).value || 'Blue';
-
-    const chRed = calculateCourseHandicap(redIndex, slope, rating);
-    const chBlue = calculateCourseHandicap(blueIndex, slope, rating);
-    const shotsGiven = Math.abs(chRed - chBlue);
-    const shotsTo = chRed > chBlue ? 'Blue' : 'Red';
-
-    const newGame = {
-      redName, blueName, redIndex, blueIndex, rating, slope,
-      chRed, chBlue, shotsGiven, shotsTo,
-      holes: Array.from({ length: 18 }, (_, i) => ({ hole: i + 1, par: 4, si: i + 1, red: 0, blue: 0 }))
+  const updateGameField = (index, field, value) => {
+    const updatedGames = [...games];
+    updatedGames[index] = {
+      ...updatedGames[index],
+      [field]: value,
     };
+    setGames(updatedGames);
+  };
 
+  const startGame = (index) => {
+    const g = games[index];
+    const chRed = calculateCourseHandicap(g.redIndex, g.slope, g.rating);
+    const chBlue = calculateCourseHandicap(g.blueIndex, g.slope, g.rating);
+    const shotsGiven = Math.abs(chRed - chBlue);
+    const shotsTo = chRed > chBlue ? 'blue' : 'red';
+    const newGame = {
+      ...g,
+      chRed,
+      chBlue,
+      shotsGiven,
+      shotsTo,
+      holes: Array.from({ length: 18 }, (_, i) => ({
+        hole: i + 1,
+        par: 4,
+        si: i + 1,
+        red: 0,
+        blue: 0
+      })),
+    };
     const updatedGames = [...games];
     updatedGames[index] = newGame;
     setGames(updatedGames);
@@ -48,111 +54,143 @@ function App() {
 
   const updateHole = (index, team, delta) => {
     const updated = [...games];
-    updated[activeGameIndex].holes[index][team] += delta;
-    if (updated[activeGameIndex].holes[index][team] < 0) updated[activeGameIndex].holes[index][team] = 0;
+    const game = updated[activeGameIndex];
+    const score = game.holes[index][team] + delta;
+    game.holes[index][team] = score < 0 ? 0 : score;
     setGames(updated);
   };
 
-  const calculateResult = (hole) => {
+  const calculateResult = (hole, game) => {
+    if (!hole) return '-';
     const { red, blue, si } = hole;
-    const game = games[activeGameIndex];
-    const strokeHoles = Array.from({ length: game.shotsGiven }, (_, i) => i + 1);
+    const { shotsGiven, shotsTo } = game;
+    const strokeHoles = Array.from({ length: shotsGiven }, (_, i) => i + 1);
+    const applyShot = strokeHoles.includes(si);
     let redScore = red;
     let blueScore = blue;
-
-    if (strokeHoles.includes(si)) {
-      if (game.shotsTo === 'Red') redScore--;
+    if (applyShot) {
+      if (shotsTo === 'red') redScore--;
       else blueScore--;
     }
-
     if (redScore < blueScore) return game.redName;
     if (blueScore < redScore) return game.blueName;
     return 'Half';
   };
 
   const computeMatchStatus = (game) => {
-    let redUp = 0, blueUp = 0, holesPlayed = 0;
-
-    for (let i = 0; i < game.holes.length; i++) {
-      const hole = game.holes[i];
-      if (hole.red === 0 && hole.blue === 0) break;
-      const result = calculateResult(hole);
+    if (!game || !game.holes) return 'All Square';
+    let redUp = 0;
+    let blueUp = 0;
+    let remaining = 18;
+    game.holes.forEach(hole => {
+      const result = calculateResult(hole, game);
       if (result === game.redName) redUp++;
       else if (result === game.blueName) blueUp++;
-      holesPlayed++;
-    }
-
+      remaining--;
+    });
     const diff = redUp - blueUp;
-    const holesLeft = 18 - holesPlayed;
-
-    if (diff > holesLeft) return `${game.redName} ${diff}&${holesLeft}`;
-    if (diff < -holesLeft) return `${game.blueName} ${-diff}&${holesLeft}`;
-    if (diff > 0 && holesPlayed === 18) return `${game.redName} 1 Up`;
-    if (diff < 0 && holesPlayed === 18) return `${game.blueName} 1 Up`;
-    if (holesPlayed === 18) return 'All Square';
-
-    return diff > 0 ? `${game.redName} ${diff} Up` : diff < 0 ? `${game.blueName} ${-diff} Up` : 'All Square';
+    if (diff > 0 && diff > remaining) return `${game.redName} ${diff}&${remaining}`;
+    if (diff < 0 && -diff > remaining) return `${game.blueName} ${-diff}&${remaining}`;
+    if (diff > 0) return `${game.redName} ${diff} Up`;
+    if (diff < 0) return `${game.blueName} ${-diff} Up`;
+    return 'All Square';
   };
 
-  const resetGame = (index) => {
-    if (!games[index]) return;
-    const clone = { ...games[index], holes: games[index].holes.map(h => ({ ...h, red: 0, blue: 0 })) };
-    const updated = [...games];
-    updated[index] = clone;
-    setGames(updated);
+  const resetScores = () => {
+    const reset = games.map(g => {
+      if (!g || !g.holes) return g;
+      return {
+        ...g,
+        holes: g.holes.map(h => ({ ...h, red: 0, blue: 0 }))
+      };
+    });
+    setGames(reset);
   };
 
-  const exportGames = () => {
-    const dataStr = JSON.stringify(games, null, 2);
-    const blob = new Blob([dataStr], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'golf_games.json';
-    a.click();
+  const exportJSON = () => {
+    const data = JSON.stringify(games, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'match_data.json';
+    link.click();
   };
+
+  const currentGame = games[activeGameIndex];
 
   return (
     <div className="app-container">
       <h1>Golf Matchplay Tracker</h1>
 
-      <div className="game-list">
-        {games.map((game, i) => (
+      <div className="game-buttons">
+        {games.map((g, i) => (
           <button key={i} onClick={() => setActiveGameIndex(i)}>
-            {game ? `${game.redName} vs ${game.blueName} (${computeMatchStatus(game)})` : `Game ${i + 1}`}
+            {g?.redName || 'Red'} vs {g?.blueName || 'Blue'} ({computeMatchStatus(g)})
           </button>
         ))}
-        <button onClick={exportGames}>Export</button>
       </div>
 
-      {games.map((_, i) => (
-        <div key={i} className="game-setup">
-          <span>Game {i + 1}:</span>
-          <input id={`redName${i}`} placeholder="Red" defaultValue={games[i]?.redName || ''} />
-          <input id={`blueName${i}`} placeholder="Blue" defaultValue={games[i]?.blueName || ''} />
-          <input type="number" id={`redIndex${i}`} defaultValue={games[i]?.redIndex || 10} />
-          <input type="number" id={`blueIndex${i}`} defaultValue={games[i]?.blueIndex || 8} />
-          <input type="number" id={`rating${i}`} defaultValue={games[i]?.rating || 72} />
-          <input type="number" id={`slope${i}`} defaultValue={games[i]?.slope || 113} />
-          <button onClick={() => startGame(i)}>Start</button>
-          <button onClick={() => resetGame(i)}>Reset</button>
-        </div>
-      ))}
+      <div className="setup-section">
+        {games.map((g, i) => (
+          <div key={i}>
+            <strong>Game {i + 1}</strong>{' '}
+            <input
+              placeholder="Red"
+              value={g?.redName || ''}
+              onChange={e => updateGameField(i, 'redName', e.target.value)}
+            />{' '}
+            <input
+              placeholder="Blue"
+              value={g?.blueName || ''}
+              onChange={e => updateGameField(i, 'blueName', e.target.value)}
+            />{' '}
+            <input
+              type="number"
+              placeholder="Red Index"
+              value={g?.redIndex || ''}
+              onChange={e => updateGameField(i, 'redIndex', +e.target.value)}
+            />{' '}
+            <input
+              type="number"
+              placeholder="Blue Index"
+              value={g?.blueIndex || ''}
+              onChange={e => updateGameField(i, 'blueIndex', +e.target.value)}
+            />{' '}
+            <input
+              type="number"
+              placeholder="Rating"
+              value={g?.rating || ''}
+              onChange={e => updateGameField(i, 'rating', +e.target.value)}
+            />{' '}
+            <input
+              type="number"
+              placeholder="Slope"
+              value={g?.slope || ''}
+              onChange={e => updateGameField(i, 'slope', +e.target.value)}
+            />{' '}
+            <button onClick={() => startGame(i)}>Start</button>
+          </div>
+        ))}
+      </div>
 
-      {games[activeGameIndex] && (
+      <hr />
+
+      {currentGame && currentGame.holes && (
         <div>
-          <h3>{games[activeGameIndex].redName} vs {games[activeGameIndex].blueName}</h3>
-          <p>{games[activeGameIndex].redName} CH: {games[activeGameIndex].chRed}, {games[activeGameIndex].blueName} CH: {games[activeGameIndex].chBlue}</p>
+          <h3>{currentGame.redName} vs {currentGame.blueName}</h3>
+          <p>{currentGame.redName} CH: {currentGame.chRed}, {currentGame.blueName} CH: {currentGame.chBlue}</p>
+
           <table>
             <thead>
               <tr>
                 <th>Hole</th><th>Par</th><th>SI</th>
-                <th>{games[activeGameIndex].redName}</th>
-                <th>{games[activeGameIndex].blueName}</th>
+                <th>{currentGame.redName}</th>
+                <th>{currentGame.blueName}</th>
                 <th>Result</th>
               </tr>
             </thead>
             <tbody>
-              {games[activeGameIndex].holes.map((hole, i) => (
+              {currentGame.holes.map((hole, i) => (
                 <tr key={i}>
                   <td>{hole.hole}</td>
                   <td><input value={hole.par} onChange={e => {
@@ -175,11 +213,16 @@ function App() {
                     {hole.blue}
                     <button onClick={() => updateHole(i, 'blue', 1)}>+</button>
                   </td>
-                  <td>{calculateResult(hole)}</td>
+                  <td>{calculateResult(hole, currentGame)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+
+          <div className="action-buttons">
+            <button onClick={resetScores}>Reset Scores</button>
+            <button onClick={exportJSON}>Export JSON</button>
+          </div>
         </div>
       )}
     </div>
